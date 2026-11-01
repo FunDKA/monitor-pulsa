@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monitor H2H (CV VAS & Masterload) + Isolasi Modem IRSX</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen p-4 md:p-6">
+
+  <div class="max-w-7xl mx-auto">
+    <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-5 rounded-xl shadow-sm border border-slate-200 mb-6 gap-4">
+      <div>
+        <h1 class="text-xl md:text-2xl font-bold text-slate-900">Monitor Harga IRSX — H2H & Modem Lokal</h1>
+        <p class="text-xs md:text-sm text-slate-500 mt-1" id="lastSyncText">Menghubungkan ke server H2H & Cloud Firestore...</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <label class="cursor-pointer px-3 py-2 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition flex items-center gap-1">
+          <span>📂 Upload Excel IRSX (1x Saja)</span>
+          <input type="file" id="excelInput" accept=".xls,.xlsx" class="hidden" onchange="importExcelIRSX(event)">
+        </label>
+        <button onclick="muatDanSinkronkan()" id="btnRefresh" class="px-4 py-2 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+          🔄 Sinkronkan Sekarang
+        </button>
+      </div>
+    </div>
+
+    <div id="notifPanel" class="hidden bg-amber-50 border border-amber-300 rounded-xl p-4 mb-6 shadow-sm">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-bold text-amber-900 text-sm">🔔 Peringatan Perubahan Harga, Produk Dihapus Supplier & Margin IRSX</h2>
+        <button onclick="document.getElementById('notifPanel').classList.add('hidden')" class="text-xs text-amber-700 underline">Tutup Notifikasi</button>
+      </div>
+      <div id="notifList" class="space-y-2 max-h-64 overflow-y-auto text-xs"></div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white p-4 rounded-xl shadow-sm border border-slate-200 mb-6">
+      <div>
+        <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Cari Kode / Nama Produk</label>
+        <input type="text" id="searchInput" oninput="renderTabel()" placeholder="Ketik: 2235, VH10GB, PID-, MGXS1..." class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
+      </div>
+      <div>
+        <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Filter Jalur Sumber</label>
+        <select id="viewMode" onchange="renderTabel()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value="SEMUA_H2H">Semua Produk Jalur H2H (Tanpa Modem)</option>
+          <option value="SEMUA_IRSX">Semua Produk IRSX (H2H + Modem)</option>
+          <option value="CV_VAS">Khusus Jalur H2H: CV VAS</option>
+          <option value="MASTERLOAD">Khusus Jalur H2H: Masterload</option>
+          <option value="MODEM_LOKAL">Khusus Modem Sendiri (Rita/iSimple/Digipos/Sidompul)</option>
+          <option value="HILANG_SUPPLIER">❌ Produk H2H yang Mendadak Hilang di Supplier</option>
+          <option value="MENTAH_VAS">Katalog Mentah Web CV VAS</option>
+          <option value="MENTAH_ML">Katalog Mentah Web Masterload</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Filter Operator IRSX</label>
+        <select id="categorySelect" onchange="renderTabel()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value="SEMUA">Semua Operator</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Filter Kondisi & Margin</label>
+        <select id="filterKondisi" onchange="renderTabel()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value="SEMUA">Semua Kondisi</option>
+          <option value="RUGI">🚨 Jual Rugi (Modal > Harga Jual)</option>
+          <option value="TIPIS">⚠️ Margin Tipis (< Rp 300)</option>
+          <option value="GANGGUAN">🔴 Sedang Gangguan / Close / Hilang</option>
+          <option value="PERUBAHAN">🔔 Baru Saja Naik / Turun Harga</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="px-5 py-3 bg-slate-100 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center text-xs font-semibold text-slate-600 gap-2">
+        <span id="countText">Menampilkan 0 produk</span>
+        <span class="text-slate-500">Klik <b>"Ubah Jalur"</b> untuk mengunci produk ke CV VAS, Masterload, atau Modem</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="border-b border-slate-200 text-[11px] uppercase text-slate-500 bg-slate-50">
+              <th class="py-3 px-3">Kode IRSX</th>
+              <th class="py-3 px-3">Nama Produk & Operator</th>
+              <th class="py-3 px-3">Jalur Sumber Terkunci</th>
+              <th class="py-3 px-3 text-right">Modal H2H</th>
+              <th class="py-3 px-3 text-right">Harga Jual IRSX</th>
+              <th class="py-3 px-3 text-right">Margin Laba</th>
+              <th class="py-3 px-3 text-center">Status Live</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody" class="divide-y divide-slate-200 text-xs"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDoOPquorCCbhg0SSJZLgRi7EHu3vYo2jA",
+      authDomain: "monitor-irsx.firebaseapp.com",
+      projectId: "monitor-irsx",
+      storageBucket: "monitor-irsx.firebasestorage.app",
+      messagingSenderId: "739362666493",
+      appId: "1:739362666493:web:8b4ca2bea5bd065b758b94"
+    };
+
+    const API_URL = '/api/pulsa';
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let mapVas = new Map();
+    let mapMl  = new Map();
+    let dataIrsx = [];
+    let petaPerubahan = {};
+
+    const DAFTAR_MODEM = ['ISIMPLE', 'RITA', 'DIGIPOS', 'SIDOMPUL', 'MODEM_LAIN'];
+
+    function bunyikanAlert() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+      } catch (e) {}
+    }
+
+    function deteksiJalurAwal(kodeRaw, operatorRaw) {
+      const kode = kodeRaw.toUpperCase();
+      const op = operatorRaw.toUpperCase();
+      if (mapVas.has(kode)) return 'CV_VAS';
+      if (mapMl.has(kode))  return 'MASTERLOAD';
+      if (kode.startsWith('PID-') || kode === 'DIGI') return 'DIGIPOS';
+      if (/^\d{4}$/.test(kode) || kode === 'ISMPL')   return 'ISIMPLE';
+      if ((kode.startsWith('VH') && op.includes('TRI')) || kode === 'RITA' || kode.startsWith('VTH')) return 'RITA';
+      if (kode === 'XLAPP' || kode.startsWith('AVX') || kode.startsWith('VX')) return 'SIDOMPUL';
+      return 'BELUM_DIKETAHUI';
+    }
+
+    function apakahJalurModem(supplier) {
+      return DAFTAR_MODEM.includes(supplier);
+    }
+
+    function ambilDataLiveH2h(item) {
+      const kodeAcuan = (item.kodeH2h || item.kode).toUpperCase();
+      if (item.supplier === 'CV_VAS') return mapVas.get(kodeAcuan) || null;
+      if (item.supplier === 'MASTERLOAD') return mapMl.get(kodeAcuan) || null;
+      return null;
+    }
+
+    window.muatDanSinkronkan = async function() {
+      const btn = document.getElementById('btnRefresh');
+      btn.textContent = '⏳ Menyinkronkan...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(API_URL);
+        const json = await res.json();
+        if (!json.sukses) throw new Error(json.pesan);
+
+        mapVas = new Map(json.vas.map(i => [i.kode, i]));
+        mapMl  = new Map(json.masterload.map(i => [i.kode, i]));
+
+        const h2hCacheRef = doc(db, "monitor_h2h", "cache_gabungan_h2h");
+        const irsxDbRef   = doc(db, "monitor_h2h", "database_irsx");
+
+        const [h2hSnap, irsxSnap] = await Promise.all([getDoc(h2hCacheRef), getDoc(irsxDbRef)]);
+
+        if (irsxSnap.exists()) {
+          dataIrsx = JSON.parse(irsxSnap.data().jsonString || "[]");
+        }
+
+        let irsxPerluUpdate = false;
+        dataIrsx.forEach(item => {
+          const kd = (item.kodeH2h || item.kode).toUpperCase();
+          if (item.supplier === 'BELUM_DIKETAHUI') {
+            if (mapVas.has(kd)) { item.supplier = 'CV_VAS'; irsxPerluUpdate = true; }
+            else if (mapMl.has(kd)) { item.supplier = 'MASTERLOAD'; irsxPerluUpdate = true; }
+          }
+        });
+
+        if (irsxPerluUpdate) {
+          await setDoc(irsxDbRef, {
+            updatedAt: new Date().toISOString(),
+            total: dataIrsx.length,
+            jsonString: JSON.stringify(dataIrsx)
+          });
+        }
+
+        const gabunganBaru = [...json.vas, ...json.masterload];
+        let adaPerubahanH2h = false;
+        const listNotif = [];
+        petaPerubahan = {};
+
+        if (h2hSnap.exists()) {
+          const gabunganLama = JSON.parse(h2hSnap.data().jsonString || "[]");
+          const mapLama = new Map(gabunganLama.map(i => [`${i.supplier}:${i.kode}`, i]));
+
+          gabunganBaru.forEach(baru => {
+            const key = `${baru.supplier}:${baru.kode}`;
+            const lama = mapLama.get(key);
+            const labelSup = baru.supplier === 'CV_VAS' ? 'CV VAS' : 'Masterload';
+
+            if (!lama) {
+              adaPerubahanH2h = true;
+              petaPerubahan[key] = { tipe: 'BARU' };
+              listNotif.push(`<div class="p-2 bg-white rounded border border-blue-200">✨ <b>PRODUK H2H BARU (${labelSup}):</b> [${baru.kode}] ${baru.nama} — Rp ${baru.harga.toLocaleString('id-ID')}</div>`);
+            } else {
+              if (lama.harga !== baru.harga) {
+                adaPerubahanH2h = true;
+                const selisih = baru.harga - lama.harga;
+                const naik = selisih > 0;
+                petaPerubahan[key] = { tipe: naik ? 'NAIK' : 'TURUN', selisih };
+                listNotif.push(`<div class="p-2 bg-white rounded border border-amber-200">${naik ? '🔺 <b class="text-red-600">MODAL NAIK</b>' : '🔻 <b class="text-emerald-600">MODAL TURUN</b>'} <b>(${labelSup})</b>: [${baru.kode}] ${baru.nama} | Rp ${lama.harga.toLocaleString('id-ID')} ➔ <b>Rp ${baru.harga.toLocaleString('id-ID')}</b> (${naik ? '+' : ''}${selisih.toLocaleString('id-ID')})</div>`);
+              }
+              if (lama.status !== baru.status) {
+                adaPerubahanH2h = true;
+                const gangguan = baru.status !== 'Normal';
+                petaPerubahan[key] = { tipe: gangguan ? 'GANGGUAN' : 'PULIH' };
+                listNotif.push(`<div class="p-2 bg-white rounded border ${gangguan ? 'border-red-300' : 'border-emerald-300'}">${gangguan ? '⚠️ <b class="text-red-700">GANGGUAN / CLOSE</b>' : '✅ <b class="text-emerald-700">NORMAL KEMBALI</b>'} <b>(${labelSup})</b>: [${baru.kode}] ${baru.nama}</div>`);
+              }
+            }
+          });
+        } else {
+          adaPerubahanH2h = true;
+        }
+
+        dataIrsx.forEach(item => {
+          if (item.supplier === 'CV_VAS' || item.supplier === 'MASTERLOAD') {
+            const prodH2h = ambilDataLiveH2h(item);
+            const kodeAcuan = (item.kodeH2h || item.kode).toUpperCase();
+
+            if (!prodH2h) {
+              listNotif.push(`<div class="p-2 bg-red-100 rounded border border-red-400 text-red-950">❌ <b>PRODUK HILANG DARI ${item.supplier}:</b> Produk IRSX <b>[${item.kode}] ${item.nama}</b> (Kode H2H: ${kodeAcuan}) mendadak <b>TIDAK DITEMUKAN / DIHAPUS</b> dari katalog ${item.supplier}!</div>`);
+            } else if (prodH2h.harga > item.hargaJual) {
+              const rugi = prodH2h.harga - item.hargaJual;
+              listNotif.push(`<div class="p-2 bg-red-50 rounded border border-red-300 text-red-900">🚨 <b>JUAL RUGI (${item.supplier}):</b> [${item.kode}] ${item.nama} dijual Rp ${item.hargaJual.toLocaleString('id-ID')}, padahal modal sekarang <b>Rp ${prodH2h.harga.toLocaleString('id-ID')}</b> (Minus Rp ${rugi.toLocaleString('id-ID')})!</div>`);
+            }
+          }
+        });
+
+        if (adaPerubahanH2h) {
+          await setDoc(h2hCacheRef, {
+            updatedAt: new Date().toISOString(),
+            jsonString: JSON.stringify(gabunganBaru)
+          });
+        }
+
+        if (listNotif.length > 0) {
+          document.getElementById('notifList').innerHTML = listNotif.join('');
+          document.getElementById('notifPanel').classList.remove('hidden');
+          bunyikanAlert();
+        }
+
+        perbaruiDropdownOperator();
+        renderTabel();
+
+        const jam = new Date().toLocaleTimeString('id-ID');
+        document.getElementById('lastSyncText').textContent = `Sinkron: ${jam} WIB | CV VAS: ${json.totalVas} | Masterload: ${json.totalMasterload} | Database IRSX: ${dataIrsx.length} produk`;
+
+      } catch (err) {
+        alert('Gagal sinkronisasi: ' + err.message);
+      } finally {
+        btn.textContent = '🔄 Sinkronkan Sekarang';
+        btn.disabled = false;
+      }
+    };
+
+    window.importExcelIRSX = function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        let currentOperator = 'UMUM';
+        const hasilParsing = [];
+        const mapLama = new Map(dataIrsx.map(i => [i.kode, i]));
+
+        rows.forEach((row, index) => {
+          if (index === 0) return;
+          const kol0 = String(row[0] || '').trim();
+          const kol1 = String(row[1] || '').trim();
+          const kode = String(row[2] || '').trim();
+
+          if (kol0 === '-' && kol1.toLowerCase().includes('operator')) {
+            currentOperator = kol1.replace(/Operator\s*:\s*/i, '').trim();
+          } else if (kode && kode !== 'Kode') {
+            const kodeUpper = kode.toUpperCase();
+            const eksis = mapLama.get(kode);
+            const jalurTerkunci = (eksis && eksis.supplier !== 'BELUM_DIKETAHUI')
+              ? eksis.supplier
+              : deteksiJalurAwal(kodeUpper, currentOperator);
+
+            hasilParsing.push({
+              operator: currentOperator,
+              nama: kol1,
+              kode: kode,
+              hargaJual: parseFloat(row[3]) || 0,
+              supplier: jalurTerkunci,
+              kodeH2h: eksis?.kodeH2h || kodeUpper
+            });
+          }
+        });
+
+        dataIrsx = hasilParsing;
+
+        await setDoc(doc(db, "monitor_h2h", "database_irsx"), {
+          updatedAt: new Date().toISOString(),
+          total: dataIrsx.length,
+          jsonString: JSON.stringify(dataIrsx)
+        });
+
+        alert(`Berhasil menyimpan & mengunci jalur ${dataIrsx.length} produk IRSX ke Cloud Firestore!`);
+        perbaruiDropdownOperator();
+        renderTabel();
+      };
+      reader.readAsArrayBuffer(file);
+    };
+
+    window.aturJalurSupplier = async function(kodeIrsx) {
+      const item = dataIrsx.find(i => i.kode === kodeIrsx);
+      if (!item) return;
+
+      const input = prompt(
+        `Kunci Jalur Sumber untuk [${item.kode}] ${item.nama}:\n\n` +
+        `1. Jika dari CV VAS, ketik: VAS:KODE_VAS (misal VAS:AIP3GBNS)\n` +
+        `2. Jika dari Masterload, ketik: ML:KODE_ML (misal ML:TD150GBH)\n` +
+        `3. Jika dari Modem/Chip Sendiri, ketik salah satu:\n` +
+        `   ISIMPLE / RITA / DIGIPOS / SIDOMPUL`,
+        item.supplier === 'CV_VAS' ? `VAS:${item.kodeH2h}` : (item.supplier === 'MASTERLOAD' ? `ML:${item.kodeH2h}` : item.supplier)
+      );
+
+      if (!input) return;
+      const bersih = input.trim().toUpperCase();
+
+      if (DAFTAR_MODEM.includes(bersih)) {
+        item.supplier = bersih;
+        item.kodeH2h = item.kode.toUpperCase();
+      } else if (bersih.includes(':')) {
+        const [sup, kd] = bersih.split(':').map(s => s.trim());
+        item.supplier = (sup === 'VAS' || sup === 'CV_VAS') ? 'CV_VAS' : 'MASTERLOAD';
+        item.kodeH2h = kd;
+      } else {
+        item.kodeH2h = bersih;
+        if (mapVas.has(bersih)) item.supplier = 'CV_VAS';
+        else if (mapMl.has(bersih)) item.supplier = 'MASTERLOAD';
+      }
+
+      await setDoc(doc(db, "monitor_h2h", "database_irsx"), {
+        updatedAt: new Date().toISOString(),
+        total: dataIrsx.length,
+        jsonString: JSON.stringify(dataIrsx)
+      });
+
+      renderTabel();
+    };
+
+    function perbaruiDropdownOperator() {
+      const select = document.getElementById('categorySelect');
+      const ops = [...new Set(dataIrsx.map(i => i.operator))];
+      select.innerHTML = `<option value="SEMUA">Semua Operator (${ops.length})</option>` +
+        ops.map(o => `<option value="${o}">${o}</option>`).join('');
+    }
+
+    window.renderTabel = function() {
+      const keyword = document.getElementById('searchInput').value.toLowerCase();
+      const mode = document.getElementById('viewMode').value;
+      const kat = document.getElementById('categorySelect').value;
+      const kondisi = document.getElementById('filterKondisi').value;
+      const tbody = document.getElementById('tableBody');
+
+      if (mode === 'MENTAH_VAS' || mode === 'MENTAH_ML' || dataIrsx.length === 0) {
+        const sumberMentah = mode === 'MENTAH_ML' ? [...mapMl.values()] : [...mapVas.values()];
+        const hasilMentah = sumberMentah.filter(i => i.nama.toLowerCase().includes(keyword) || i.kode.toLowerCase().includes(keyword));
+        document.getElementById('countText').textContent = `Menampilkan ${hasilMentah.length} produk Katalog Mentah Supplier`;
+        tbody.innerHTML = hasilMentah.map(v => `
+          <tr class="hover:bg-slate-50">
+            <td class="py-2.5 px-3 font-mono font-bold">${v.kode}</td>
+            <td class="py-2.5 px-3"><div class="font-medium">${v.nama}</div><div class="text-[10px] text-slate-400">${v.kategori}</div></td>
+            <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${v.supplier === 'CV_VAS' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}">${v.supplier}</span></td>
+            <td class="py-2.5 px-3 text-right font-semibold">${v.harga.toLocaleString('id-ID')}</td>
+            <td class="py-2.5 px-3 text-right text-slate-400">-</td>
+            <td class="py-2.5 px-3 text-right text-slate-400">-</td>
+            <td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${v.status === 'Normal' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}">${v.ketStatus}</span></td>
+          </tr>
+        `).join('');
+        return;
+      }
+
+      const hasil = dataIrsx.filter(item => {
+        const isModem = apakahJalurModem(item.supplier);
+        const prodH2h = ambilDataLiveH2h(item);
+        const hilangDariSupplier = (item.supplier === 'CV_VAS' || item.supplier === 'MASTERLOAD') && !prodH2h;
+
+        const cocokKata = item.nama.toLowerCase().includes(keyword) || item.kode.toLowerCase().includes(keyword) || (item.kodeH2h || '').toLowerCase().includes(keyword);
+        const cocokKat = kat === 'SEMUA' || item.operator === kat;
+        if (!cocokKata || !cocokKat) return false;
+
+        if (mode === 'SEMUA_H2H' && isModem) return false;
+        if (mode === 'CV_VAS' && item.supplier !== 'CV_VAS') return false;
+        if (mode === 'MASTERLOAD' && item.supplier !== 'MASTERLOAD') return false;
+        if (mode === 'MODEM_LOKAL' && !isModem) return false;
+        if (mode === 'HILANG_SUPPLIER' && !hilangDariSupplier) return false;
+
+        const margin = prodH2h ? (item.hargaJual - prodH2h.harga) : null;
+        const keyUbah = prodH2h ? `${prodH2h.supplier}:${prodH2h.kode}` : '';
+
+        if (kondisi === 'RUGI' && (margin === null || margin >= 0)) return false;
+        if (kondisi === 'TIPIS' && (margin === null || margin < 0 || margin >= 300)) return false;
+        if (kondisi === 'GANGGUAN' && !hilangDariSupplier && (!prodH2h || prodH2h.status === 'Normal')) return false;
+        if (kondisi === 'PERUBAHAN' && !petaPerubahan[keyUbah]) return false;
+
+        return true;
+      });
+
+      document.getElementById('countText').textContent = `Menampilkan ${hasil.length} dari ${dataIrsx.length} produk IRSX`;
+
+      tbody.innerHTML = hasil.map(item => {
+        const isModem = apakahJalurModem(item.supplier);
+        const prodH2h = ambilDataLiveH2h(item);
+        const hilangDariSupplier = (item.supplier === 'CV_VAS' || item.supplier === 'MASTERLOAD') && !prodH2h;
+        const margin = prodH2h ? (item.hargaJual - prodH2h.harga) : null;
+        const keyUbah = prodH2h ? `${prodH2h.supplier}:${prodH2h.kode}` : '';
+        const infoUbah = petaPerubahan[keyUbah];
+
+        let badgeUbah = '';
+        if (infoUbah?.tipe === 'NAIK') badgeUbah = `<span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded">+${infoUbah.selisih}</span>`;
+        if (infoUbah?.tipe === 'TURUN') badgeUbah = `<span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 rounded">${infoUbah.selisih}</span>`;
+
+        let badgeJalur = '';
+        if (isModem) {
+          badgeJalur = `<span class="px-2 py-0.5 bg-teal-100 text-teal-800 rounded text-[10px] font-bold">MODEM: ${item.supplier}</span>`;
+        } else if (item.supplier === 'CV_VAS') {
+          badgeJalur = `<span class="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-[10px] font-bold">CV VAS (${item.kodeH2h})</span>`;
+        } else if (item.supplier === 'MASTERLOAD') {
+          badgeJalur = `<span class="px-2 py-0.5 bg-purple-100 text-purple-800 rounded text-[10px] font-bold">MASTERLOAD (${item.kodeH2h})</span>`;
+        } else {
+          badgeJalur = `<span class="px-2 py-0.5 bg-slate-200 text-slate-600 rounded text-[10px] font-semibold">Belum Terkunci</span>`;
+        }
+
+        let badgeStatus = '<span class="text-[10px] text-slate-400">-</span>';
+        if (isModem) {
+          badgeStatus = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600">Stok Modem Sendiri</span>`;
+        } else if (hilangDariSupplier) {
+          badgeStatus = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">❌ HILANG DI ${item.supplier}</span>`;
+        } else if (prodH2h) {
+          badgeStatus = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${prodH2h.status === 'Normal' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}">${prodH2h.ketStatus}</span>`;
+        }
+
+        return `
+          <tr class="hover:bg-slate-50 ${(margin !== null && margin < 0) || hilangDariSupplier ? 'bg-red-50/70' : ''}">
+            <td class="py-2.5 px-3 font-mono font-bold text-slate-800">${item.kode}</td>
+            <td class="py-2.5 px-3">
+              <div class="font-medium text-slate-900">${item.nama}</div>
+              <div class="text-[10px] text-slate-400">${item.operator}</div>
+            </td>
+            <td class="py-2.5 px-3">
+              ${badgeJalur}
+              <button onclick="aturJalurSupplier('${item.kode}')" class="ml-1 text-[10px] text-blue-600 underline hover:text-blue-800">Ubah Jalur</button>
+            </td>
+            <td class="py-2.5 px-3 text-right font-semibold text-slate-900">
+              ${prodH2h ? prodH2h.harga.toLocaleString('id-ID') + badgeUbah : '<span class="text-slate-400">-</span>'}
+            </td>
+            <td class="py-2.5 px-3 text-right font-semibold text-slate-800">${item.hargaJual.toLocaleString('id-ID')}</td>
+            <td class="py-2.5 px-3 text-right font-bold ${margin === null ? 'text-slate-400' : (margin < 0 ? 'text-red-600' : 'text-emerald-600')}">
+              ${margin !== null ? (margin >= 0 ? '+' : '') + margin.toLocaleString('id-ID') : '-'}
+            </td>
+            <td class="py-2.5 px-3 text-center">${badgeStatus}</td>
+          </tr>
+        `;
+      }).join('');
+    };
+
+    muatDanSinkronkan();
+    setInterval(muatDanSinkronkan, 3 * 60 * 1000);
+  </script>
+</body>
+</html>
